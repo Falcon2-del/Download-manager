@@ -1,0 +1,34 @@
+name: Yandex Disk Sync
+
+on:
+  schedule:
+    # Запуск в начале каждого часа (Cron формат)
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    # Кнопка ручного запуска в интерфейсе GitHub
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests imap-tools
+
+      - name: Run script
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          YANDEX_TOKEN: ${{ secrets.YANDEX_TOKEN }}
+          TARGET_NOTIFICATION: ${{ secrets.TARGET_NOTIFICATION }}
+          SENDER_FILTER: ${{ secrets.SENDER_FILTER }}
+        run: python main.py
