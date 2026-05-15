@@ -7,51 +7,25 @@ from email.mime.text import MIMEText
 from imap_tools import MailBox, AND
 from datetime import datetime
 
-# --- НАСТРОЙКИ ---
+# Чтение настроек из Secrets (переменных окружения)
 CONFIG = {
     "imap_server": "imap.gmail.com",
-    "email_user": "smithjohn01042000@gmail.com",
-    "email_pass": "nghy letu udzx hbdc",
-    "yandex_token": "y0__wgBEPSB7IQCGNuWAyDTpcOiF_PK9W6CqB0N1qJP3wxXsAgcvmWm",
-    "target_notification": "idolon666@gmail.com",
-    "sender_filter": "idolon666@gmail.com",
-    "sleep_time": 60,
-    "github_token": "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", # Рекомендую добавить в переменные окружения
-    "gist_id": "e9b2b65cab1cf8581fe3b33ff47681d6"
+    "email_user": os.getenv("EMAIL_USER"),
+    "email_pass": os.getenv("EMAIL_PASS"),
+    "yandex_token": os.getenv("YANDEX_TOKEN"),
+    "target_notification": os.getenv("TARGET_NOTIFICATION"),
+    "sender_filter": os.getenv("SENDER_FILTER", os.getenv("TARGET_NOTIFICATION")),
 }
 
-def update_heartbeat():
-    """Обновляет Gist для системы мониторинга"""
-    if not CONFIG["github_token"]:
-        return
-    url = f"https://api.github.com/gists/{CONFIG['gist_id']}"
-    headers = {"Authorization": f"token {CONFIG['github_token']}"}
-    data = {
-        "description": "Heartbeat for Yandex Disk Downloader",
-        "files": {"heartbeat.txt": {"content": f"Last run: {datetime.now().isoformat()}"}}
-    }
-    try:
-        requests.patch(url, json=data, headers=headers, timeout=10)
-    except:
-        pass
-
 def clean_name(name):
-    """
-    Обрезает строку до первого непечатного символа или запрещенного знака.
-    ПРОБЕЛЫ ТЕПЕРЬ РАЗРЕШЕНЫ.
-    """
     if not name:
         return "unnamed"
-    
-    # Из списка запрещенных убран пробел: / \ : * ? " < > | '
     match = re.search(r'[\x00-\x1F\x7F/\\:\*\?"<>|\']', name)
     if match:
         name = name[:match.start()]
-    
     return name.strip() or "unnamed"
 
 def create_yandex_folder(folder_name):
-    """Создает папку на Яндекс.Диске, если её нет"""
     headers = {"Authorization": f"OAuth {CONFIG['yandex_token']}"}
     clean_folder = clean_name(folder_name)
     requests.put(f"https://cloud-api.yandex.net/v1/disk/resources?path={clean_folder}", headers=headers)
@@ -79,7 +53,8 @@ def send_final_notification(filename, size_mb):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(CONFIG["email_user"], CONFIG["email_pass"])
             server.send_message(msg)
-    except: pass
+    except Exception as e:
+        print(f"Ошибка отправки уведомления: {e}")
 
 def parse_content(text):
     text = re.sub('<[^<]+?>', '', text).replace('\r', '').strip()
@@ -99,11 +74,6 @@ def parse_content(text):
     if movie_match:
         title = clean_name(movie_match.group(1).strip())
         return url, f"{title}.mp4"
-
-    other_match = re.search(rf'{re.escape(url)}\s+(.+)', text)
-    if other_match:
-        filename = clean_name(other_match.group(1).strip())
-        return url, filename
     
     raw_name = url.split('/')[-1]
     return url, clean_name(raw_name)
@@ -119,39 +89,42 @@ def upload_via_yandex_async(url, yandex_path):
         status_url = res.json().get('href')
         while True:
             status_res = requests.get(status_url, headers=headers)
-            status = status_res.json().get('status', 'failed')
+            status_data = status_res.json()
+            status = status_data.get('status')
             if status == 'success': return True
-            elif status == 'failed': return False
+            if status == 'failed': return False
             time.sleep(20)
-    except: return False
+    except Exception as e:
+        print(f"Ошибка API Яндекса: {e}")
+        return False
 
-# --- ЦИКЛ ---
-print(f"--- Скрипт запущен ---")
-last_heartbeat = 0
-
-while True:
-    # Обновление Heartbeat раз в 1 минут
-    if time.time() - last_heartbeat > 60:
-        update_heartbeat()
-        last_heartbeat = time.time()
-
+def main():
+    print(f"--- Запуск проверки почты: {datetime.now().isoformat()} ---")
     try:
         with MailBox(CONFIG["imap_server"]).login(CONFIG["email_user"], CONFIG["email_pass"]) as mailbox:
-            msgs = list(mailbox.fetch(AND(from_=CONFIG["sender_filter"], seen=False)))
-            for msg in msgs:
+            # Ищем только непрочитанные письма от нужного отправителя
+            messages = list(mailbox.fetch(AND(from_=CONFIG["sender_filter"], seen=False)))
+            
+            if not messages:
+                print("Новых писем не обнаружено.")
+                return
+
+            for msg in messages:
                 content = msg.text or msg.html or ""
                 f_url, f_path = parse_content(content)
                 
                 if f_url and f_path:
+                    print(f"Найдена ссылка. Загрузка {f_path}...")
                     if upload_via_yandex_async(f_url, f_path):
                         size = get_file_size_mb(f_path)
                         send_final_notification(f_path, size)
-                        mailbox.flag(msg.uid, ['SEEN'], True)
-                    else:
-                        print(f"Ошибка загрузки: {f_path}")
-                else:
-                    mailbox.flag(msg.uid, ['SEEN'], True)
+                        print(f"Успешно загружено: {f_path}")
+                
+                # Помечаем прочитанным в любом случае, чтобы не обрабатывать повторно
+                mailbox.flag(msg.uid, ['SEEN'], True)
+                
     except Exception as e:
-        print(f"Ошибка: {e}")
-    
-    time.sleep(CONFIG["sleep_time"])
+        print(f"Критическая ошибка: {e}")
+
+if __name__ == "__main__":
+    main()
