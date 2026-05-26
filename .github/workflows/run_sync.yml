@@ -2,8 +2,6 @@ name: Yandex Disk Sync
 
 on:
   workflow_dispatch:
-    # Позволяет запускать скрипт вручную из вкладки Actions 
-    # или через POST-запрос из внешних сервисов (cronjob.org и др.)
 
 jobs:
   run-sync:
